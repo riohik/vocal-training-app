@@ -6,7 +6,9 @@ import { PitchDisplay } from "@/components/audio/PitchDisplay";
 import { CentsMeter } from "@/components/audio/CentsMeter";
 import { PianoKeyboard } from "@/components/audio/PianoKeyboard";
 import { VolumeBar } from "@/components/audio/VolumeBar";
+import { ScoreDisplay } from "@/components/training/ScoreDisplay";
 import { generateScale, getScaleForLevel } from "@/lib/training/scale-generator";
+import { centsToScore, scoreToRank, rankLabel, rankColor } from "@/lib/training/scorer";
 import { midiToFreq, midiToNoteName } from "@/lib/pitch/note-mapper";
 import { playTone } from "@/lib/audio/tone-generator";
 import type { TargetNote } from "@/types";
@@ -14,8 +16,7 @@ import type { TargetNote } from "@/types";
 type SessionState = "idle" | "countdown" | "playing" | "finished";
 
 export default function ScalePracticePage() {
-  const { isListening, pitchData, rms, start, stop, error } =
-    usePitchDetection();
+  const { pitchData, rms, start, stop, error } = usePitchDetection();
 
   const [sessionState, setSessionState] = useState<SessionState>("idle");
   const [level, setLevel] = useState(1);
@@ -23,79 +24,105 @@ export default function ScalePracticePage() {
   const [currentNoteIndex, setCurrentNoteIndex] = useState(0);
   const [countdown, setCountdown] = useState(3);
   const [scores, setScores] = useState<number[]>([]);
-  const [noteStartTime, setNoteStartTime] = useState(0);
+  const [noteProgress, setNoteProgress] = useState(0);
 
   const centsHistoryRef = useRef<number[]>([]);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const noteStartTimeRef = useRef(0);
 
   const currentTarget = scale[currentNoteIndex] ?? null;
 
-  // Score calculation for current note
+  // Score calculation for current note - use target-relative cents
   useEffect(() => {
     if (sessionState !== "playing" || !currentTarget || !pitchData) return;
+    if (pitchData.frequency <= 0) return;
 
-    const targetMidi = currentTarget.midiNote;
-    const detectedMidi = pitchData.midiNote;
+    const targetFreq = midiToFreq(currentTarget.midiNote);
+    const targetCents = Math.abs(
+      1200 * Math.log2(pitchData.frequency / targetFreq),
+    );
 
-    // Only score if we're on the right note (within 1 semitone)
-    if (Math.abs(detectedMidi - targetMidi) <= 1) {
-      centsHistoryRef.current.push(Math.abs(pitchData.cents));
+    // Only score if within reasonable range (< 100 cents = 1 semitone)
+    if (targetCents < 100) {
+      centsHistoryRef.current.push(targetCents);
     }
   }, [pitchData, sessionState, currentTarget]);
 
-  // Advance to next note
+  // Progress timer - updates independently of pitch detection
+  useEffect(() => {
+    if (sessionState !== "playing" || !currentTarget) return;
+
+    progressIntervalRef.current = setInterval(() => {
+      const elapsed = Date.now() - noteStartTimeRef.current;
+      setNoteProgress(
+        Math.min((elapsed / currentTarget.durationMs) * 100, 100),
+      );
+    }, 50);
+
+    return () => {
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    };
+  }, [sessionState, currentNoteIndex, currentTarget]);
+
+  // Advance to next note - side effects extracted from setState updater
   const advanceNote = useCallback(() => {
-    // Calculate score for completed note
+    // Calculate score for completed note using centsToScore
     const history = centsHistoryRef.current;
     if (history.length > 0) {
-      const avgCents =
-        history.reduce((a, b) => a + b, 0) / history.length;
-      let score = 100;
-      if (avgCents > 5) score = 90;
-      if (avgCents > 10) score = 80;
-      if (avgCents > 15) score = 70;
-      if (avgCents > 20) score = 55;
-      if (avgCents > 30) score = 40;
-      if (avgCents > 40) score = 25;
-      if (avgCents > 50) score = 10;
-      setScores((prev) => [...prev, score]);
+      const avgCents = history.reduce((a, b) => a + b, 0) / history.length;
+      setScores((prev) => [...prev, centsToScore(avgCents)]);
     } else {
       setScores((prev) => [...prev, 0]);
     }
     centsHistoryRef.current = [];
 
-    setCurrentNoteIndex((prev) => {
-      const next = prev + 1;
-      if (next >= scale.length) {
-        setSessionState("finished");
-        stop();
-        return prev;
-      }
-      // Play reference tone for next note
-      const nextNote = scale[next];
-      if (nextNote) {
-        playTone(midiToFreq(nextNote.midiNote), 400, 0.2);
-      }
-      setNoteStartTime(Date.now());
-      return next;
-    });
-  }, [scale, stop]);
+    const nextIndex = currentNoteIndex + 1;
+    if (nextIndex >= scale.length) {
+      // Session complete
+      setSessionState("finished");
+      stop();
+      return;
+    }
 
-  // Timer for each note
+    // Advance to next note
+    setCurrentNoteIndex(nextIndex);
+    noteStartTimeRef.current = Date.now();
+
+    // Play reference tone for next note
+    const nextNote = scale[nextIndex];
+    if (nextNote) {
+      playTone(midiToFreq(nextNote.midiNote), 400, 0.2);
+    }
+  }, [scale, stop, currentNoteIndex]);
+
+  // Timer for each note duration
   useEffect(() => {
     if (sessionState !== "playing" || !currentTarget) return;
 
-    timerRef.current = setTimeout(() => {
+    noteTimerRef.current = setTimeout(() => {
       advanceNote();
     }, currentTarget.durationMs);
 
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
     };
   }, [sessionState, currentNoteIndex, currentTarget, advanceNote]);
 
+  const clearAllTimers = useCallback(() => {
+    if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    noteTimerRef.current = null;
+    countdownIntervalRef.current = null;
+    progressIntervalRef.current = null;
+  }, []);
+
   // Start session
   const startSession = async () => {
+    clearAllTimers();
+
     const config = getScaleForLevel(level);
     const generatedScale = generateScale(
       config.rootMidi,
@@ -105,21 +132,23 @@ export default function ScalePracticePage() {
     setScale(generatedScale);
     setCurrentNoteIndex(0);
     setScores([]);
+    setNoteProgress(0);
     centsHistoryRef.current = [];
 
     await start();
     setSessionState("countdown");
     setCountdown(3);
 
-    // Countdown
+    // Countdown with ref-tracked interval
     let count = 3;
-    const countdownInterval = setInterval(() => {
+    countdownIntervalRef.current = setInterval(() => {
       count--;
       setCountdown(count);
       if (count <= 0) {
-        clearInterval(countdownInterval);
+        if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
         setSessionState("playing");
-        setNoteStartTime(Date.now());
+        noteStartTimeRef.current = Date.now();
         // Play first reference tone
         if (generatedScale[0]) {
           playTone(midiToFreq(generatedScale[0].midiNote), 400, 0.2);
@@ -128,13 +157,21 @@ export default function ScalePracticePage() {
     }, 1000);
   };
 
-  const resetSession = () => {
+  const resetSession = useCallback(() => {
+    clearAllTimers();
     stop();
     setSessionState("idle");
     setScores([]);
     setCurrentNoteIndex(0);
     centsHistoryRef.current = [];
-  };
+  }, [clearAllTimers, stop]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      clearAllTimers();
+    };
+  }, [clearAllTimers]);
 
   // Calculate final score
   const averageScore =
@@ -142,21 +179,7 @@ export default function ScalePracticePage() {
       ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
       : 0;
 
-  const getRank = (score: number) => {
-    if (score >= 95) return { rank: "S", label: "Perfect!", color: "text-accent" };
-    if (score >= 85) return { rank: "A", label: "Great", color: "text-blue-400" };
-    if (score >= 70) return { rank: "B", label: "Good", color: "text-primary-light" };
-    if (score >= 50) return { rank: "C", label: "OK", color: "text-warning" };
-    return { rank: "D", label: "Try Again", color: "text-danger" };
-  };
-
-  // Progress for current note
-  const noteProgress = currentTarget
-    ? Math.min(
-        ((Date.now() - noteStartTime) / currentTarget.durationMs) * 100,
-        100,
-      )
-    : 0;
+  const rank = scoreToRank(averageScore);
 
   return (
     <div className="flex flex-col gap-6">
@@ -200,7 +223,7 @@ export default function ScalePracticePage() {
           </div>
           <button
             onClick={startSession}
-            className="rounded-full bg-gradient-to-r from-primary to-primary-light px-12 py-4 text-lg font-bold text-white transition-all hover:scale-105 active:scale-95"
+            className="rounded-full bg-linear-to-r from-primary to-primary-light px-12 py-4 text-lg font-bold text-white transition-all hover:scale-105 active:scale-95"
           >
             スタート
           </button>
@@ -242,9 +265,7 @@ export default function ScalePracticePage() {
           {/* Detected pitch */}
           <PitchDisplay pitchData={pitchData} />
           <CentsMeter pitchData={pitchData} />
-          <PianoKeyboard
-            activeMidi={pitchData?.midiNote ?? null}
-          />
+          <PianoKeyboard activeMidi={pitchData?.midiNote ?? null} />
           <VolumeBar rms={rms} />
 
           <button
@@ -260,11 +281,11 @@ export default function ScalePracticePage() {
       {sessionState === "finished" && (
         <div className="flex flex-col items-center gap-6 py-8">
           <div className="text-center">
-            <div className={`text-7xl font-extrabold ${getRank(averageScore).color}`}>
-              {getRank(averageScore).rank}
+            <div className={`text-7xl font-extrabold ${rankColor(rank)}`}>
+              {rank}
             </div>
             <div className="mt-2 text-xl font-semibold">
-              {getRank(averageScore).label}
+              {rankLabel(rank)}
             </div>
             <div className="mt-1 text-3xl font-bold text-primary-light">
               {averageScore}点
@@ -278,9 +299,7 @@ export default function ScalePracticePage() {
                 key={i}
                 className="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2 text-sm"
               >
-                <span>
-                  {midiToNoteName(note.midiNote)}
-                </span>
+                <span>{midiToNoteName(note.midiNote)}</span>
                 <span
                   className={
                     (scores[i] ?? 0) >= 80
@@ -305,7 +324,7 @@ export default function ScalePracticePage() {
             </button>
             <button
               onClick={startSession}
-              className="rounded-full bg-gradient-to-r from-primary to-primary-light px-6 py-3 font-semibold text-white transition-all hover:scale-105"
+              className="rounded-full bg-linear-to-r from-primary to-primary-light px-6 py-3 font-semibold text-white transition-all hover:scale-105"
             >
               もう一度
             </button>
