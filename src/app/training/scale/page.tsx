@@ -6,10 +6,12 @@ import { PitchDisplay } from "@/components/audio/PitchDisplay";
 import { CentsMeter } from "@/components/audio/CentsMeter";
 import { PianoKeyboard } from "@/components/audio/PianoKeyboard";
 import { VolumeBar } from "@/components/audio/VolumeBar";
+import { ScoreDisplay } from "@/components/training/ScoreDisplay";
 import { generateScale, getScaleForLevel } from "@/lib/training/scale-generator";
+import { centsToScore, calculateSessionScore } from "@/lib/training/scorer";
 import { midiToFreq, midiToNoteName } from "@/lib/pitch/note-mapper";
 import { playTone } from "@/lib/audio/tone-generator";
-import type { TargetNote } from "@/types";
+import type { TargetNote, ScoreResult } from "@/types";
 
 type SessionState = "idle" | "countdown" | "playing" | "finished";
 
