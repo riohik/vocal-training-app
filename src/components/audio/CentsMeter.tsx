@@ -1,5 +1,3 @@
-"use client";
-
 import type { PitchData } from "@/types";
 
 interface CentsMeterProps {
