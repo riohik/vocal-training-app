@@ -28,7 +28,9 @@ export function Navigation() {
       <div className="mx-auto flex max-w-lg justify-around py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]">
         {NAV_ITEMS.map(({ href, label, icon: Icon, activeColor }) => {
           const isActive =
-            href === "/" ? pathname === "/" : pathname.startsWith(href);
+            href === "/"
+              ? pathname === "/"
+              : pathname === href || pathname.startsWith(`${href}/`);
 
           return (
             <Link

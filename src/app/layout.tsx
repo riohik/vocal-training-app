@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Outfit } from "next/font/google";
 import { Navigation } from "@/components/ui/Navigation";
+import { MotionProvider } from "@/components/ui/MotionProvider";
 import "./globals.css";
 
 const outfit = Outfit({
@@ -17,10 +18,9 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#08080f",
+  themeColor: "#121218",
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
 };
 
 export default function RootLayout({
@@ -34,10 +34,12 @@ export default function RootLayout({
         className="flex min-h-full flex-col bg-background text-foreground"
         style={{ fontFamily: "var(--font-outfit), system-ui, sans-serif" }}
       >
-        <main className="mx-auto flex w-full max-w-lg flex-1 flex-col px-4 pb-20 pt-6">
-          {children}
-        </main>
-        <Navigation />
+        <MotionProvider>
+          <main className="mx-auto flex w-full max-w-lg flex-1 flex-col px-4 pb-20 pt-6">
+            {children}
+          </main>
+          <Navigation />
+        </MotionProvider>
       </body>
     </html>
   );
