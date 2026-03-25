@@ -80,50 +80,101 @@ export default function PitchMatchPage() {
   const pitchesRef = useRef<number[]>([]);
   const hitTimeRef = useRef<number | null>(null);
   const roundStartRef = useRef(0);
-  const sustainedRef = useRef(0);
-  const totalRef = useRef(0);
+  const totalMsRef = useRef(0);
+  const matchingMsRef = useRef(0);
+  const lastTimestampRef = useRef(0);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const sessionIdRef = useRef(0);
 
   const current = rounds[currentRound] ?? null;
 
-  // Track pitch while singing
+  // Track pitch while singing - use target-relative cents
   useEffect(() => {
     if (sessionState !== "singing" || !current) return;
 
-    totalRef.current++;
+    const now = performance.now();
+    if (lastTimestampRef.current > 0) {
+      const delta = now - lastTimestampRef.current;
+      totalMsRef.current += delta;
 
-    if (pitchData && Math.abs(pitchData.midiNote - current.targetMidi) <= 1) {
-      centsRef.current.push(Math.abs(pitchData.cents));
-      pitchesRef.current.push(pitchData.frequency);
-      sustainedRef.current++;
+      if (pitchData && pitchData.frequency > 0) {
+        const targetFreq = midiToFreq(current.targetMidi);
+        const targetCents = Math.abs(
+          1200 * Math.log2(pitchData.frequency / targetFreq),
+        );
+        if (targetCents < 100) {
+          centsRef.current.push(targetCents);
+          pitchesRef.current.push(pitchData.frequency);
+          matchingMsRef.current += delta;
 
-      // Record first hit time
-      if (hitTimeRef.current === null) {
-        hitTimeRef.current = Date.now() - roundStartRef.current;
+          if (hitTimeRef.current === null) {
+            hitTimeRef.current = Date.now() - roundStartRef.current;
+          }
+        }
       }
     }
+    lastTimestampRef.current = now;
   }, [pitchData, sessionState, current]);
 
+  const clearAllTimers = useCallback(() => {
+    timersRef.current.forEach((id) => clearTimeout(id));
+    timersRef.current = [];
+  }, []);
+
+  const scheduleTimeout = useCallback(
+    (fn: () => void, ms: number) => {
+      const id = setTimeout(fn, ms);
+      timersRef.current.push(id);
+      return id;
+    },
+    [],
+  );
+
   const finishRound = useCallback(() => {
+    const mySessionId = sessionIdRef.current;
     const cents = centsRef.current;
-    const score =
+    const hitTime = hitTimeRef.current;
+    const totalMs = totalMsRef.current;
+    const matchingMs = matchingMsRef.current;
+
+    const pitchScore =
       cents.length > 0
         ? Math.round(
             cents.reduce((a, c) => a + centsToScore(c), 0) / cents.length,
           )
         : 0;
 
-    setRoundScores((prev) => [...prev, score]);
+    const roundTimingScore =
+      hitTime !== null ? timingScore(hitTime, current?.singDurationMs ?? 2000) : 20;
 
-    // Reset refs
+    const roundEnduranceScore =
+      totalMs > 0 ? enduranceScore(matchingMs, current?.singDurationMs ?? 2000) : 0;
+
+    const roundStabilityScore =
+      pitchesRef.current.length > 1 && current
+        ? stabilityScore(pitchesRef.current, midiToFreq(current.targetMidi))
+        : 0;
+
+    setRoundScores((prev) => [
+      ...prev,
+      Math.round(
+        pitchScore * 0.4 +
+          roundStabilityScore * 0.25 +
+          roundTimingScore * 0.2 +
+          roundEnduranceScore * 0.15,
+      ),
+    ]);
+
+    // Reset refs for next round
     centsRef.current = [];
     pitchesRef.current = [];
     hitTimeRef.current = null;
-    sustainedRef.current = 0;
-    totalRef.current = 0;
+    totalMsRef.current = 0;
+    matchingMsRef.current = 0;
+    lastTimestampRef.current = 0;
 
     const nextRound = currentRound + 1;
     if (nextRound >= rounds.length) {
-      // All rounds done
       setSessionState("finished");
       stop();
       return;
@@ -133,44 +184,60 @@ export default function PitchMatchPage() {
     setPhase("listen");
     setSessionState("listening");
 
-    // Play next reference tone after a brief pause
-    setTimeout(() => {
+    // Play next reference tone after a brief pause (with timer tracking)
+    scheduleTimeout(() => {
+      if (sessionIdRef.current !== mySessionId) return;
       const nextTarget = rounds[nextRound];
       if (nextTarget) {
         playTone(midiToFreq(nextTarget.targetMidi), 600, 0.3);
-        // Switch to singing after listen duration
-        setTimeout(() => {
+        scheduleTimeout(() => {
+          if (sessionIdRef.current !== mySessionId) return;
           setPhase("sing");
           setSessionState("singing");
           roundStartRef.current = Date.now();
-          // Auto-finish after sing duration
-          setTimeout(() => {
+          lastTimestampRef.current = 0;
+          scheduleTimeout(() => {
+            if (sessionIdRef.current !== mySessionId) return;
             finishRound();
           }, nextTarget.singDurationMs);
         }, nextTarget.listenDurationMs + 200);
       }
     }, 500);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentRound, rounds, stop]);
+  }, [currentRound, rounds, stop, current, scheduleTimeout]);
 
-  // Calculate final score when finished
+  // Calculate final score when finished - use actual per-round weighted scores
   useEffect(() => {
     if (sessionState !== "finished" || roundScores.length === 0) return;
 
-    const avgPitch =
-      roundScores.reduce((a, b) => a + b, 0) / roundScores.length;
+    const avgScore =
+      Math.round(roundScores.reduce((a, b) => a + b, 0) / roundScores.length);
 
-    const result = calculateSessionScore({
-      pitchAccuracy: Math.round(avgPitch),
-      stability: 75, // Simplified for pitch match
-      timing: 70,
-      endurance: 80,
+    // Final result uses the already-weighted per-round scores
+    setScoreResult({
+      total: avgScore,
+      rank:
+        avgScore >= 95
+          ? "S"
+          : avgScore >= 85
+            ? "A"
+            : avgScore >= 70
+              ? "B"
+              : avgScore >= 50
+                ? "C"
+                : "D",
+      pitchAccuracy: avgScore,
+      stability: avgScore,
+      timing: avgScore,
+      endurance: avgScore,
     });
-
-    setScoreResult(result);
   }, [sessionState, roundScores]);
 
   const startSession = async () => {
+    clearAllTimers();
+    sessionIdRef.current++;
+    const mySessionId = sessionIdRef.current;
+
     const generatedRounds = generateRounds(level);
     setRounds(generatedRounds);
     setCurrentRound(0);
@@ -179,8 +246,9 @@ export default function PitchMatchPage() {
     centsRef.current = [];
     pitchesRef.current = [];
     hitTimeRef.current = null;
-    sustainedRef.current = 0;
-    totalRef.current = 0;
+    totalMsRef.current = 0;
+    matchingMsRef.current = 0;
+    lastTimestampRef.current = 0;
 
     await start();
 
@@ -188,11 +256,12 @@ export default function PitchMatchPage() {
     setSessionState("countdown");
     setCountdown(3);
     let count = 3;
-    const interval = setInterval(() => {
+    const countdownInterval = setInterval(() => {
       count--;
       setCountdown(count);
       if (count <= 0) {
-        clearInterval(interval);
+        clearInterval(countdownInterval);
+        if (sessionIdRef.current !== mySessionId) return;
 
         // Start first round: listen phase
         setPhase("listen");
@@ -200,25 +269,38 @@ export default function PitchMatchPage() {
         const first = generatedRounds[0];
         if (first) {
           playTone(midiToFreq(first.targetMidi), 600, 0.3);
-          setTimeout(() => {
+          scheduleTimeout(() => {
+            if (sessionIdRef.current !== mySessionId) return;
             setPhase("sing");
             setSessionState("singing");
             roundStartRef.current = Date.now();
-            setTimeout(() => {
+            lastTimestampRef.current = 0;
+            scheduleTimeout(() => {
+              if (sessionIdRef.current !== mySessionId) return;
               finishRound();
             }, first.singDurationMs);
           }, first.listenDurationMs + 200);
         }
       }
     }, 1000);
+    timersRef.current.push(countdownInterval as unknown as ReturnType<typeof setTimeout>);
   };
 
-  const resetSession = () => {
+  const resetSession = useCallback(() => {
+    clearAllTimers();
+    sessionIdRef.current++;
     stop();
     setSessionState("idle");
     setScoreResult(null);
     setRoundScores([]);
-  };
+  }, [clearAllTimers, stop]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      clearAllTimers();
+    };
+  }, [clearAllTimers]);
 
   return (
     <div className="flex flex-col gap-6">

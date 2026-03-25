@@ -45,26 +45,40 @@ export default function LongTonePage() {
 
   const centsHistoryRef = useRef<number[]>([]);
   const pitchHistoryRef = useRef<number[]>([]);
-  const sustainedFramesRef = useRef(0);
-  const totalFramesRef = useRef(0);
+  const totalMsRef = useRef(0);
+  const matchingMsRef = useRef(0);
+  const lastTimestampRef = useRef(0);
   const startTimeRef = useRef(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const targetMidi = TARGET_NOTES[selectedNote].midi;
+  const targetFreq = midiToFreq(targetMidi);
   const targetDuration = DURATIONS[selectedDuration].seconds;
 
-  // Track pitch during playing
+  // Track pitch during playing - use millisecond-based measurement
   useEffect(() => {
     if (sessionState !== "playing") return;
 
-    totalFramesRef.current++;
+    const now = performance.now();
+    if (lastTimestampRef.current > 0) {
+      const delta = now - lastTimestampRef.current;
+      totalMsRef.current += delta;
 
-    if (pitchData && Math.abs(pitchData.midiNote - targetMidi) <= 1) {
-      centsHistoryRef.current.push(Math.abs(pitchData.cents));
-      pitchHistoryRef.current.push(pitchData.frequency);
-      sustainedFramesRef.current++;
+      if (pitchData && pitchData.frequency > 0) {
+        // Compute cents deviation relative to target note
+        const targetCents = Math.abs(
+          1200 * Math.log2(pitchData.frequency / targetFreq),
+        );
+        if (targetCents < 100) {
+          // Within reasonable range of target
+          centsHistoryRef.current.push(targetCents);
+          pitchHistoryRef.current.push(pitchData.frequency);
+          matchingMsRef.current += delta;
+        }
+      }
     }
-  }, [pitchData, sessionState, targetMidi]);
+    lastTimestampRef.current = now;
+  }, [pitchData, sessionState, targetFreq]);
 
   // Elapsed timer
   useEffect(() => {
@@ -91,8 +105,8 @@ export default function LongTonePage() {
 
     const cents = centsHistoryRef.current;
     const pitches = pitchHistoryRef.current;
-    const sustained = sustainedFramesRef.current;
-    const total = totalFramesRef.current;
+    const totalMs = totalMsRef.current;
+    const matchingMs = matchingMsRef.current;
 
     const avgCentsScore =
       cents.length > 0
@@ -101,9 +115,9 @@ export default function LongTonePage() {
           )
         : 0;
 
-    const stability = stabilityScore(pitches);
+    const stability = stabilityScore(pitches, targetFreq);
     const endurance = enduranceScore(
-      total > 0 ? (sustained / total) * targetDuration * 1000 : 0,
+      totalMs > 0 ? matchingMs : 0,
       targetDuration * 1000,
     );
 
@@ -115,13 +129,14 @@ export default function LongTonePage() {
     });
 
     setScoreResult(result);
-  }, [stop, targetDuration]);
+  }, [stop, targetDuration, targetFreq]);
 
   const startSession = async () => {
     centsHistoryRef.current = [];
     pitchHistoryRef.current = [];
-    sustainedFramesRef.current = 0;
-    totalFramesRef.current = 0;
+    totalMsRef.current = 0;
+    matchingMsRef.current = 0;
+    lastTimestampRef.current = 0;
     setElapsed(0);
     setScoreResult(null);
 

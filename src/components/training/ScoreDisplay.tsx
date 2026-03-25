@@ -1,5 +1,3 @@
-"use client";
-
 import type { ScoreResult } from "@/types";
 import { rankLabel, rankColor } from "@/lib/training/scorer";
 

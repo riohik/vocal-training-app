@@ -16,19 +16,29 @@ export function centsToScore(cents: number): number {
 }
 
 /**
- * Calculate stability score from an array of pitch values.
- * Lower standard deviation = higher score.
+ * Calculate stability score from an array of frequencies against a target.
+ * Converts to cents deviation to normalize across pitch ranges.
+ * Lower standard deviation in cents = higher score.
  */
-export function stabilityScore(pitchValues: number[]): number {
-  if (pitchValues.length < 2) return 0;
+export function stabilityScore(
+  pitchValues: number[],
+  targetFreq: number,
+): number {
+  if (pitchValues.length < 2 || targetFreq <= 0) return 0;
 
-  const mean = pitchValues.reduce((a, b) => a + b, 0) / pitchValues.length;
+  // Convert Hz to cents deviation from target
+  const centsDeviations = pitchValues.map(
+    (freq) => 1200 * Math.log2(freq / targetFreq),
+  );
+
+  const mean =
+    centsDeviations.reduce((a, b) => a + b, 0) / centsDeviations.length;
   const variance =
-    pitchValues.reduce((sum, v) => sum + (v - mean) ** 2, 0) /
-    pitchValues.length;
+    centsDeviations.reduce((sum, v) => sum + (v - mean) ** 2, 0) /
+    centsDeviations.length;
   const stdDev = Math.sqrt(variance);
 
-  // Map stdDev to score: 0 stdDev = 100, 50+ stdDev = 0
+  // Map stdDev to score: 0 cents stdDev = 100, 50+ cents stdDev = 0
   return Math.max(0, Math.round(100 - stdDev * 2));
 }
 
