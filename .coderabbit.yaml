@@ -1,0 +1,14 @@
+language: ja
+reviews:
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "src/lib/pitch/**"
+      instructions: "音声処理・ピッチ検出のコア。パフォーマンスが重要。Web Worker で動作することを前提に。"
+    - path: "src/components/**"
+      instructions: "React コンポーネント。'use client' ディレクティブの必要性を確認。Server Component で済むなら Client にしない。"
+    - path: "src/app/**"
+      instructions: "Next.js 16 App Router。params/searchParams は Promise であることに注意。"
+chat:
+  auto_reply: true
