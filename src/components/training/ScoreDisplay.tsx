@@ -41,12 +41,14 @@ function ScoreBar({
   value: number;
   weight: string;
 }) {
+  const clamped = Math.max(0, Math.min(100, value));
+
   const barColor =
-    value >= 80
+    clamped >= 80
       ? "bg-accent"
-      : value >= 60
+      : clamped >= 60
         ? "bg-primary-light"
-        : value >= 40
+        : clamped >= 40
           ? "bg-warning"
           : "bg-danger";
 
@@ -56,12 +58,12 @@ function ScoreBar({
         <span className="text-muted">
           {label} <span className="text-[10px]">({weight})</span>
         </span>
-        <span className="font-semibold">{value}</span>
+        <span className="font-semibold">{clamped}</span>
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-card">
         <div
           className={`h-full rounded-full transition-[width] duration-500 ${barColor}`}
-          style={{ width: `${value}%` }}
+          style={{ width: `${clamped}%` }}
         />
       </div>
     </div>
